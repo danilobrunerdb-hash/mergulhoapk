@@ -1837,8 +1837,8 @@ table.g .hit em { color: #7F1D1D !important; }
     return frame({ title: 'Relatório da operação', sub: op.divers.length + ' mergulhador(es)' + (pend ? ' · ' + pend + ' em andamento' : ''), back: true },
       cols(h, '<p class="ask" style="font-size:1rem;margin-top:18px">Dados do relatório (opcional)</p>' +
       metaField('meta.ocorrencia', 'Ocorrência / REDS', op.meta.ocorrencia) + metaField('meta.local', 'Local', op.meta.local) + metaField('meta.supervisor', 'Supervisor de mergulho', op.meta.supervisor) +
-      '<button class="btn" data-a="pdf">Baixar / Compartilhar Relatório PDF</button>' +
-      '<button class="btn alt" data-a="openpdf" style="margin-top:10px">Abrir PDF em nova aba</button>' +
+      '<button class="btn" data-a="pdf">Compartilhar relatório PDF</button>' +
+      '<button class="btn alt" data-a="dlpdf" style="margin-top:10px">Baixar relatório PDF</button>' +
       '<button class="link" data-a="reset">Começar um novo dia de mergulho</button>'));
   }
   function metaField(p, l, v) { return '<div class="field"><label class="lbl" for="' + p + '">' + esc(l) + '</label><input id="' + p + '" data-p="' + p + '" class="sm" value="' + esc(v) + '"></div>'; }
@@ -2050,10 +2050,11 @@ table.g .hit em { color: #7F1D1D !important; }
       return go('end');
     }
     if (a === 'reset') { if (confirm('Apagar os dados de todos os mergulhadores e começar um novo dia?')) { op = F.newOp(); ui = { step: 0 }; go(0); } return; }
-    if (a === 'pdf') return pdf(b, 'download');
-    if (a === 'openpdf') return pdf(b, 'open');
+    if (a === 'pdf') return pdf(b, 'share');
+    if (a === 'dlpdf') return pdf(b, 'download');
   });
 
+  // mode: 'share' = só compartilhar | 'download' = só baixar/salvar
   function pdf(btn, mode) {
     var bytes;
     try {
@@ -2064,6 +2065,8 @@ table.g .hit em { color: #7F1D1D !important; }
       return;
     }
     var d = new Date(), fname = 'relatorio-mergulho-' + d.getFullYear() + ('0' + (d.getMonth() + 1)).slice(-2) + ('0' + d.getDate()).slice(-2) + '-' + ('0' + d.getHours()).slice(-2) + ('0' + d.getMinutes()).slice(-2) + '.pdf';
+    function errMsg(err) { return err && (err.message || err.errorMessage) ? String(err.message || err.errorMessage) : ''; }
+
     // App Android (Capacitor): WebView não baixa blob:, então usa os plugins nativos
     var cap = window.Capacitor, plug = cap && cap.Plugins;
     if (cap && cap.isNativePlatform && cap.isNativePlatform() && plug && plug.Filesystem && plug.Share) {
@@ -2071,83 +2074,72 @@ table.g .hit em { color: #7F1D1D !important; }
       for (var bi = 0; bi < bytes.length; bi += 0x8000) b64 += String.fromCharCode.apply(null, bytes.subarray(bi, bi + 0x8000));
       b64 = btoa(b64);
       btn.disabled = true;
-      plug.Filesystem.writeFile({ path: fname, data: b64, directory: 'CACHE' }).then(function (r) {
-        // cópia na pasta Documentos (melhor esforço; não bloqueia o compartilhamento)
-        try { plug.Filesystem.writeFile({ path: fname, data: b64, directory: 'DOCUMENTS' }).catch(function () {}); } catch (e0) {}
-        return plug.Share.share({ title: 'Relatório de Mergulho CBMMG', text: fname, url: r.uri, dialogTitle: 'Salvar ou enviar relatório PDF' });
-      }).then(function () {
-        toast('Relatório gerado');
-      }).catch(function (err) {
-        var m = err && (err.message || err.errorMessage) ? String(err.message || err.errorMessage) : '';
-        if (/cancel/i.test(m)) toast('Compartilhamento cancelado');
-        else toast('Falha ao salvar o PDF: ' + (m || 'erro desconhecido'));
-      }).then(function () { btn.disabled = false; });
+      var done = function () { btn.disabled = false; };
+      if (mode === 'share') {
+        plug.Filesystem.writeFile({ path: fname, data: b64, directory: 'CACHE' }).then(function (r) {
+          return plug.Share.share({ title: 'Relatório de Mergulho CBMMG', text: fname, url: r.uri, dialogTitle: 'Compartilhar relatório PDF' });
+        }).catch(function (err) {
+          var m = errMsg(err);
+          if (!/cancel/i.test(m)) toast('Falha ao compartilhar o PDF: ' + (m || 'erro desconhecido'));
+        }).then(done);
+      } else {
+        // baixar: pasta Download; se o Android não permitir, pasta Documentos; último recurso: menu de salvar do Android
+        var askPerm = (plug.Filesystem.requestPermissions ? plug.Filesystem.requestPermissions() : Promise.resolve()).catch(function () {});
+        askPerm.then(function () {
+          return plug.Filesystem.writeFile({ path: 'Download/' + fname, data: b64, directory: 'EXTERNAL_STORAGE', recursive: true }).then(function () {
+            toast('PDF salvo em Download: ' + fname);
+          }, function () {
+            return plug.Filesystem.writeFile({ path: fname, data: b64, directory: 'DOCUMENTS', recursive: true }).then(function () {
+              toast('PDF salvo em Documentos: ' + fname);
+            });
+          });
+        }).catch(function () {
+          return plug.Filesystem.writeFile({ path: fname, data: b64, directory: 'CACHE' }).then(function (r) {
+            toast('Escolha onde salvar o PDF');
+            return plug.Share.share({ title: fname, url: r.uri, dialogTitle: 'Salvar relatório PDF' });
+          });
+        }).catch(function (err) {
+          var m = errMsg(err);
+          if (!/cancel/i.test(m)) toast('Falha ao baixar o PDF: ' + (m || 'erro desconhecido'));
+        }).then(done);
+      }
       return;
     }
 
+    // Navegador comum
     var blob = new Blob([bytes], { type: 'application/pdf' });
     var url = URL.createObjectURL(blob);
 
-    if (mode === 'open') {
-      var w = window.open(url, '_blank');
-      if (!w) {
-        var aOpen = document.createElement('a');
-        aOpen.href = url;
-        aOpen.target = '_blank';
-        document.body.appendChild(aOpen);
-        aOpen.click();
-        setTimeout(function () { aOpen.remove(); }, 1000);
+    if (mode === 'share') {
+      if (navigator.share && navigator.canShare) {
+        try {
+          var file = new File([blob], fname, { type: 'application/pdf' });
+          if (navigator.canShare({ files: [file] })) {
+            navigator.share({ files: [file], title: 'Relatório de Mergulho CBMMG', text: 'Relatório de Mergulho - ' + fname })
+              .then(function () { toast('Relatório compartilhado!'); })
+              .catch(function (err) { if (err && err.name !== 'AbortError') toast('Não foi possível compartilhar o PDF.'); });
+            return;
+          }
+        } catch (err) { /* cai no aviso abaixo */ }
       }
-      toast('Relatório aberto');
+      toast('Compartilhamento indisponível neste navegador. Use "Baixar relatório PDF".');
       return;
     }
 
-    // 1. Em celulares / Android / PWA: usar Web Share API nativa se suportada
-    if (navigator.share && navigator.canShare) {
-      try {
-        var file = new File([blob], fname, { type: 'application/pdf' });
-        if (navigator.canShare({ files: [file] })) {
-          navigator.share({
-            files: [file],
-            title: 'Relatório de Mergulho CBMMG',
-            text: 'Relatório de Mergulho - ' + fname
-          }).then(function () {
-            toast('Relatório compartilhado!');
-          }).catch(function (err) {
-            if (err && err.name !== 'AbortError') {
-              triggerDownload(url, fname, blob);
-            }
-          });
-          return;
-        }
-      } catch (err) {
-        // Fallback para download direto
-      }
-    }
-
-    // 2. Download direto via link
-    triggerDownload(url, fname, blob);
+    triggerDownload(url, fname);
   }
 
-  function triggerDownload(url, fname, blob) {
+  function triggerDownload(url, fname) {
     try {
       var a = document.createElement('a');
       a.href = url;
       a.download = fname;
-      a.target = '_blank';
       document.body.appendChild(a);
       a.click();
-      setTimeout(function () {
-        a.remove();
-      }, 2000);
+      setTimeout(function () { a.remove(); }, 2000);
       toast('Download iniciado');
     } catch (e) {
-      try {
-        window.open(url, '_blank');
-        toast('Relatório aberto em nova aba');
-      } catch (e2) {
-        toast('Download indisponível neste navegador.');
-      }
+      toast('Download indisponível neste navegador.');
     }
   }
 
