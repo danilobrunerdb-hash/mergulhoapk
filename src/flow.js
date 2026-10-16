@@ -195,14 +195,18 @@
   // ---------------------------------------------------------------- relatório PDF
   function report(op, opts) {
     opts = opts || {};
+    op = op || {};
+    op.meta = op.meta || {};
+    op.cyl = op.cyl || { volL: 11.2, pIni: 200 };
+    op.divers = Array.isArray(op.divers) ? op.divers : [];
     var now = opts.now || new Date(), s1 = siteOut(op).step1;
     var doc = PDF.create({ jpegB64: opts.logoJpg, jpegW: 160, jpegH: 160, footer: 'App ' + E.APP_VERSION + ' · tabelas ' + E.dataHash() + ' · emitido em ' + now.toLocaleString('pt-BR') });
     doc.header('RELATÓRIO DE MERGULHO', 'Corpo de Bombeiros Militar de Minas Gerais · ITO 12 · Tabelas NOAA (2010)');
     doc.heading('Identificação');
     doc.kv('Data e hora do relatório', now.toLocaleString('pt-BR'));
-    doc.kv('Ocorrência / REDS', op.meta.ocorrencia || '—');
-    doc.kv('Local', op.meta.local || '—');
-    doc.kv('Supervisor de mergulho', op.meta.supervisor || '—');
+    doc.kv('Ocorrência / REDS', (op.meta && op.meta.ocorrencia) || '—');
+    doc.kv('Local', (op.meta && op.meta.local) || '—');
+    doc.kv('Supervisor de mergulho', (op.meta && op.meta.supervisor) || '—');
     doc.kv('Mergulhadores registrados', String(op.divers.length));
 
     doc.heading('Local e altitude');
@@ -211,7 +215,7 @@
     doc.kv('Altitude do local do mergulho', E.fmt1(s1.site) + ' m');
     doc.kv('Grupo pela diferença de altitude', s1.entryGroup || 'Nenhum', s1.entryGroup ? 'ITO 12, Anexo C (linha ' + s1.entryRow + ' m)' : '');
     doc.kv('Profundidade medida do local', E.fmt1(num(op.depth)) + ' m');
-    doc.kv('Cilindro', String(op.cyl.volL).replace('.', ',') + ' L · ' + op.cyl.pIni + ' bar (reserva de 50 bar não utilizada)', 'ITO 12, itens 3.6 e 3.17');
+    doc.kv('Cilindro', String((op.cyl && op.cyl.volL) || 11.2).replace('.', ',') + ' L · ' + ((op.cyl && op.cyl.pIni) || 200) + ' bar (reserva de 50 bar não utilizada)', 'ITO 12, itens 3.6 e 3.17');
 
     op.divers.forEach(function (dv, i) {
       var out = compute(diverState(op, i));
@@ -230,7 +234,7 @@
         if (r.k > 0) doc.kv('Intervalo de superfície antes', E.min2hm(r.si) + ' (h:mm)');
         doc.kv('Profundidade medida / corrigida', E.fmt1(r.depth) + ' m / ' + E.fmt1(r.adjusted) + ' m', 'Anexo B (NOAA) da ITO 12');
         doc.kv('Grupo antes do mergulho', r.preGroup || 'Nenhum', r.preKind === 'altitude' ? 'Anexo C e descanso no local (Tabela 2)' : r.preKind === 'grupo' ? 'Tabela 2 (NOAA)' : r.preKind === 'novo' ? 'Intervalo > 15h50: novo mergulho (ITO 3.32)' : '');
-        doc.kv('Tempo máximo pela tabela', r.limit.value + ' min', r.limit.src);
+        doc.kv('Tempo máximo pela tabela', (r.limit && r.limit.value != null ? r.limit.value + ' min' : 'Não aplicável'), (r.limit && r.limit.src) || '');
         doc.kv('Autonomia do cilindro', au && au.ok ? au.minutes + ' min' : 'Não calculada', 'ITO 12, item 3.6');
         if (mx) doc.kv('Tempo máximo de fundo considerado', mx.value + ' min', mx.by === 'autonomia' ? 'Limitado pela autonomia do cilindro' : 'Limitado pela tabela' + (au && au.ok ? '' : '; respeitar também a autonomia do cilindro'));
         doc.kv('Tempo de fundo realizado', r.bt + ' min');

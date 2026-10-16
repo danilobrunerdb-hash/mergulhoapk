@@ -9,7 +9,13 @@
   function load() { try { var v = JSON.parse(localStorage.getItem(KEY)); if (v && v.op && v.ui && v.op.divers && v.op.divers.length) return v; } catch (e) {} return null; }
   var saved = load();
   var op = saved ? saved.op : F.newOp();
-  op.divers.forEach(function (d) { if (d.rest == null) d.rest = op.altRest != null ? String(op.altRest) : ''; });   // v4.1 → descanso individual
+  op.meta = op.meta || { ocorrencia: '', local: '', supervisor: '' };
+  op.cyl = op.cyl || { volL: 11.2, pIni: 200 };
+  if (!Array.isArray(op.divers) || !op.divers.length) op.divers = [F.newDiver()];
+  op.divers.forEach(function (d) {
+    if (d.rest == null) d.rest = op.altRest != null ? String(op.altRest) : '';
+    if (!Array.isArray(d.dives) || !d.dives.length) d.dives = [{ depth: op.depth || '', bt: '', si: '', next: '' }];
+  });
   var ui = saved ? saved.ui : { step: 0 };          // 0..3 | 'd' (mergulhador ativo) | 'end'
   var view = null;                                  // null | 'ref' | { table: { i, k } }
   var helpOpen = {}, touched = {};
@@ -292,7 +298,9 @@
     return frame({ title: 'Relatório da operação', sub: op.divers.length + ' mergulhador(es)' + (pend ? ' · ' + pend + ' em andamento' : ''), back: true },
       cols(h, '<p class="ask" style="font-size:1rem;margin-top:18px">Dados do relatório (opcional)</p>' +
       metaField('meta.ocorrencia', 'Ocorrência / REDS', op.meta.ocorrencia) + metaField('meta.local', 'Local', op.meta.local) + metaField('meta.supervisor', 'Supervisor de mergulho', op.meta.supervisor) +
-      '<button class="btn" data-a="pdf">Baixar relatório PDF</button><button class="link" data-a="reset">Começar um novo dia de mergulho</button>'));
+      '<button class="btn" data-a="pdf">Baixar / Compartilhar Relatório PDF</button>' +
+      '<button class="btn alt" data-a="openpdf" style="margin-top:10px">Abrir PDF em nova aba</button>' +
+      '<button class="link" data-a="reset">Começar um novo dia de mergulho</button>'));
   }
   function metaField(p, l, v) { return '<div class="field"><label class="lbl" for="' + p + '">' + esc(l) + '</label><input id="' + p + '" data-p="' + p + '" class="sm" value="' + esc(v) + '"></div>'; }
 
@@ -503,22 +511,83 @@
       return go('end');
     }
     if (a === 'reset') { if (confirm('Apagar os dados de todos os mergulhadores e começar um novo dia?')) { op = F.newOp(); ui = { step: 0 }; go(0); } return; }
-    if (a === 'pdf') return pdf(b);
+    if (a === 'pdf') return pdf(b, 'download');
+    if (a === 'openpdf') return pdf(b, 'open');
   });
 
-  function pdf(btn) {
+  function pdf(btn, mode) {
     var bytes;
-    try { bytes = F.report(op, { logoJpg: window.CBMMG_LOGO_JPG }); } catch (e) { toast('Não foi possível gerar o relatório.'); return; }
+    try {
+      bytes = F.report(op, { logoJpg: window.CBMMG_LOGO_JPG });
+    } catch (e) {
+      console.error('Erro ao gerar relatório PDF:', e);
+      toast('Não foi possível gerar o relatório: ' + (e && e.message ? e.message : 'Erro interno'));
+      return;
+    }
     var d = new Date(), fname = 'relatorio-mergulho-' + d.getFullYear() + ('0' + (d.getMonth() + 1)).slice(-2) + ('0' + d.getDate()).slice(-2) + '-' + ('0' + d.getHours()).slice(-2) + ('0' + d.getMinutes()).slice(-2) + '.pdf';
     var blob = new Blob([bytes], { type: 'application/pdf' });
-    btn.disabled = true;
-    dlP.then(function (dl) {
-      if (dl) return dl.save({ filename: fname, data: blob }).then(function () { toast('Relatório salvo'); }, function (e) { if (e && e.code === 'declined') toast('Download cancelado'); else fallback(); });
-      fallback();
-    }).catch(fallback).then(function () { btn.disabled = false; });
-    function fallback() {
-      try { var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = fname; document.body.appendChild(a); a.click(); a.remove(); toast('Relatório gerado'); }
-      catch (e) { toast('Download indisponível neste navegador.'); }
+    var url = URL.createObjectURL(blob);
+
+    if (mode === 'open') {
+      var w = window.open(url, '_blank');
+      if (!w) {
+        var aOpen = document.createElement('a');
+        aOpen.href = url;
+        aOpen.target = '_blank';
+        document.body.appendChild(aOpen);
+        aOpen.click();
+        setTimeout(function () { aOpen.remove(); }, 1000);
+      }
+      toast('Relatório aberto');
+      return;
+    }
+
+    // 1. Em celulares / Android / PWA: usar Web Share API nativa se suportada
+    if (navigator.share && navigator.canShare) {
+      try {
+        var file = new File([blob], fname, { type: 'application/pdf' });
+        if (navigator.canShare({ files: [file] })) {
+          navigator.share({
+            files: [file],
+            title: 'Relatório de Mergulho CBMMG',
+            text: 'Relatório de Mergulho - ' + fname
+          }).then(function () {
+            toast('Relatório compartilhado!');
+          }).catch(function (err) {
+            if (err && err.name !== 'AbortError') {
+              triggerDownload(url, fname, blob);
+            }
+          });
+          return;
+        }
+      } catch (err) {
+        // Fallback para download direto
+      }
+    }
+
+    // 2. Download direto via link
+    triggerDownload(url, fname, blob);
+  }
+
+  function triggerDownload(url, fname, blob) {
+    try {
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = fname;
+      a.target = '_blank';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(function () {
+        a.remove();
+      }, 2000);
+      toast('Download iniciado');
+    } catch (e) {
+      try {
+        window.open(url, '_blank');
+        toast('Relatório aberto em nova aba');
+      } catch (e2) {
+        toast('Download indisponível neste navegador.');
+      }
     }
   }
 

@@ -1454,14 +1454,18 @@ table.g .hit em { color: #7F1D1D !important; }
   // ---------------------------------------------------------------- relatório PDF
   function report(op, opts) {
     opts = opts || {};
+    op = op || {};
+    op.meta = op.meta || {};
+    op.cyl = op.cyl || { volL: 11.2, pIni: 200 };
+    op.divers = Array.isArray(op.divers) ? op.divers : [];
     var now = opts.now || new Date(), s1 = siteOut(op).step1;
     var doc = PDF.create({ jpegB64: opts.logoJpg, jpegW: 160, jpegH: 160, footer: 'App ' + E.APP_VERSION + ' · tabelas ' + E.dataHash() + ' · emitido em ' + now.toLocaleString('pt-BR') });
     doc.header('RELATÓRIO DE MERGULHO', 'Corpo de Bombeiros Militar de Minas Gerais · ITO 12 · Tabelas NOAA (2010)');
     doc.heading('Identificação');
     doc.kv('Data e hora do relatório', now.toLocaleString('pt-BR'));
-    doc.kv('Ocorrência / REDS', op.meta.ocorrencia || '—');
-    doc.kv('Local', op.meta.local || '—');
-    doc.kv('Supervisor de mergulho', op.meta.supervisor || '—');
+    doc.kv('Ocorrência / REDS', (op.meta && op.meta.ocorrencia) || '—');
+    doc.kv('Local', (op.meta && op.meta.local) || '—');
+    doc.kv('Supervisor de mergulho', (op.meta && op.meta.supervisor) || '—');
     doc.kv('Mergulhadores registrados', String(op.divers.length));
 
     doc.heading('Local e altitude');
@@ -1470,7 +1474,7 @@ table.g .hit em { color: #7F1D1D !important; }
     doc.kv('Altitude do local do mergulho', E.fmt1(s1.site) + ' m');
     doc.kv('Grupo pela diferença de altitude', s1.entryGroup || 'Nenhum', s1.entryGroup ? 'ITO 12, Anexo C (linha ' + s1.entryRow + ' m)' : '');
     doc.kv('Profundidade medida do local', E.fmt1(num(op.depth)) + ' m');
-    doc.kv('Cilindro', String(op.cyl.volL).replace('.', ',') + ' L · ' + op.cyl.pIni + ' bar (reserva de 50 bar não utilizada)', 'ITO 12, itens 3.6 e 3.17');
+    doc.kv('Cilindro', String((op.cyl && op.cyl.volL) || 11.2).replace('.', ',') + ' L · ' + ((op.cyl && op.cyl.pIni) || 200) + ' bar (reserva de 50 bar não utilizada)', 'ITO 12, itens 3.6 e 3.17');
 
     op.divers.forEach(function (dv, i) {
       var out = compute(diverState(op, i));
@@ -1489,7 +1493,7 @@ table.g .hit em { color: #7F1D1D !important; }
         if (r.k > 0) doc.kv('Intervalo de superfície antes', E.min2hm(r.si) + ' (h:mm)');
         doc.kv('Profundidade medida / corrigida', E.fmt1(r.depth) + ' m / ' + E.fmt1(r.adjusted) + ' m', 'Anexo B (NOAA) da ITO 12');
         doc.kv('Grupo antes do mergulho', r.preGroup || 'Nenhum', r.preKind === 'altitude' ? 'Anexo C e descanso no local (Tabela 2)' : r.preKind === 'grupo' ? 'Tabela 2 (NOAA)' : r.preKind === 'novo' ? 'Intervalo > 15h50: novo mergulho (ITO 3.32)' : '');
-        doc.kv('Tempo máximo pela tabela', r.limit.value + ' min', r.limit.src);
+        doc.kv('Tempo máximo pela tabela', (r.limit && r.limit.value != null ? r.limit.value + ' min' : 'Não aplicável'), (r.limit && r.limit.src) || '');
         doc.kv('Autonomia do cilindro', au && au.ok ? au.minutes + ' min' : 'Não calculada', 'ITO 12, item 3.6');
         if (mx) doc.kv('Tempo máximo de fundo considerado', mx.value + ' min', mx.by === 'autonomia' ? 'Limitado pela autonomia do cilindro' : 'Limitado pela tabela' + (au && au.ok ? '' : '; respeitar também a autonomia do cilindro'));
         doc.kv('Tempo de fundo realizado', r.bt + ' min');
@@ -1544,7 +1548,13 @@ table.g .hit em { color: #7F1D1D !important; }
   function load() { try { var v = JSON.parse(localStorage.getItem(KEY)); if (v && v.op && v.ui && v.op.divers && v.op.divers.length) return v; } catch (e) {} return null; }
   var saved = load();
   var op = saved ? saved.op : F.newOp();
-  op.divers.forEach(function (d) { if (d.rest == null) d.rest = op.altRest != null ? String(op.altRest) : ''; });   // v4.1 → descanso individual
+  op.meta = op.meta || { ocorrencia: '', local: '', supervisor: '' };
+  op.cyl = op.cyl || { volL: 11.2, pIni: 200 };
+  if (!Array.isArray(op.divers) || !op.divers.length) op.divers = [F.newDiver()];
+  op.divers.forEach(function (d) {
+    if (d.rest == null) d.rest = op.altRest != null ? String(op.altRest) : '';
+    if (!Array.isArray(d.dives) || !d.dives.length) d.dives = [{ depth: op.depth || '', bt: '', si: '', next: '' }];
+  });
   var ui = saved ? saved.ui : { step: 0 };          // 0..3 | 'd' (mergulhador ativo) | 'end'
   var view = null;                                  // null | 'ref' | { table: { i, k } }
   var helpOpen = {}, touched = {};
@@ -1827,7 +1837,9 @@ table.g .hit em { color: #7F1D1D !important; }
     return frame({ title: 'Relatório da operação', sub: op.divers.length + ' mergulhador(es)' + (pend ? ' · ' + pend + ' em andamento' : ''), back: true },
       cols(h, '<p class="ask" style="font-size:1rem;margin-top:18px">Dados do relatório (opcional)</p>' +
       metaField('meta.ocorrencia', 'Ocorrência / REDS', op.meta.ocorrencia) + metaField('meta.local', 'Local', op.meta.local) + metaField('meta.supervisor', 'Supervisor de mergulho', op.meta.supervisor) +
-      '<button class="btn" data-a="pdf">Baixar relatório PDF</button><button class="link" data-a="reset">Começar um novo dia de mergulho</button>'));
+      '<button class="btn" data-a="pdf">Baixar / Compartilhar Relatório PDF</button>' +
+      '<button class="btn alt" data-a="openpdf" style="margin-top:10px">Abrir PDF em nova aba</button>' +
+      '<button class="link" data-a="reset">Começar um novo dia de mergulho</button>'));
   }
   function metaField(p, l, v) { return '<div class="field"><label class="lbl" for="' + p + '">' + esc(l) + '</label><input id="' + p + '" data-p="' + p + '" class="sm" value="' + esc(v) + '"></div>'; }
 
@@ -2038,22 +2050,83 @@ table.g .hit em { color: #7F1D1D !important; }
       return go('end');
     }
     if (a === 'reset') { if (confirm('Apagar os dados de todos os mergulhadores e começar um novo dia?')) { op = F.newOp(); ui = { step: 0 }; go(0); } return; }
-    if (a === 'pdf') return pdf(b);
+    if (a === 'pdf') return pdf(b, 'download');
+    if (a === 'openpdf') return pdf(b, 'open');
   });
 
-  function pdf(btn) {
+  function pdf(btn, mode) {
     var bytes;
-    try { bytes = F.report(op, { logoJpg: window.CBMMG_LOGO_JPG }); } catch (e) { toast('Não foi possível gerar o relatório.'); return; }
+    try {
+      bytes = F.report(op, { logoJpg: window.CBMMG_LOGO_JPG });
+    } catch (e) {
+      console.error('Erro ao gerar relatório PDF:', e);
+      toast('Não foi possível gerar o relatório: ' + (e && e.message ? e.message : 'Erro interno'));
+      return;
+    }
     var d = new Date(), fname = 'relatorio-mergulho-' + d.getFullYear() + ('0' + (d.getMonth() + 1)).slice(-2) + ('0' + d.getDate()).slice(-2) + '-' + ('0' + d.getHours()).slice(-2) + ('0' + d.getMinutes()).slice(-2) + '.pdf';
     var blob = new Blob([bytes], { type: 'application/pdf' });
-    btn.disabled = true;
-    dlP.then(function (dl) {
-      if (dl) return dl.save({ filename: fname, data: blob }).then(function () { toast('Relatório salvo'); }, function (e) { if (e && e.code === 'declined') toast('Download cancelado'); else fallback(); });
-      fallback();
-    }).catch(fallback).then(function () { btn.disabled = false; });
-    function fallback() {
-      try { var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = fname; document.body.appendChild(a); a.click(); a.remove(); toast('Relatório gerado'); }
-      catch (e) { toast('Download indisponível neste navegador.'); }
+    var url = URL.createObjectURL(blob);
+
+    if (mode === 'open') {
+      var w = window.open(url, '_blank');
+      if (!w) {
+        var aOpen = document.createElement('a');
+        aOpen.href = url;
+        aOpen.target = '_blank';
+        document.body.appendChild(aOpen);
+        aOpen.click();
+        setTimeout(function () { aOpen.remove(); }, 1000);
+      }
+      toast('Relatório aberto');
+      return;
+    }
+
+    // 1. Em celulares / Android / PWA: usar Web Share API nativa se suportada
+    if (navigator.share && navigator.canShare) {
+      try {
+        var file = new File([blob], fname, { type: 'application/pdf' });
+        if (navigator.canShare({ files: [file] })) {
+          navigator.share({
+            files: [file],
+            title: 'Relatório de Mergulho CBMMG',
+            text: 'Relatório de Mergulho - ' + fname
+          }).then(function () {
+            toast('Relatório compartilhado!');
+          }).catch(function (err) {
+            if (err && err.name !== 'AbortError') {
+              triggerDownload(url, fname, blob);
+            }
+          });
+          return;
+        }
+      } catch (err) {
+        // Fallback para download direto
+      }
+    }
+
+    // 2. Download direto via link
+    triggerDownload(url, fname, blob);
+  }
+
+  function triggerDownload(url, fname, blob) {
+    try {
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = fname;
+      a.target = '_blank';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(function () {
+        a.remove();
+      }, 2000);
+      toast('Download iniciado');
+    } catch (e) {
+      try {
+        window.open(url, '_blank');
+        toast('Relatório aberto em nova aba');
+      } catch (e2) {
+        toast('Download indisponível neste navegador.');
+      }
     }
   }
 
