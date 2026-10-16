@@ -525,6 +525,27 @@
       return;
     }
     var d = new Date(), fname = 'relatorio-mergulho-' + d.getFullYear() + ('0' + (d.getMonth() + 1)).slice(-2) + ('0' + d.getDate()).slice(-2) + '-' + ('0' + d.getHours()).slice(-2) + ('0' + d.getMinutes()).slice(-2) + '.pdf';
+    // App Android (Capacitor): WebView não baixa blob:, então usa os plugins nativos
+    var cap = window.Capacitor, plug = cap && cap.Plugins;
+    if (cap && cap.isNativePlatform && cap.isNativePlatform() && plug && plug.Filesystem && plug.Share) {
+      var b64 = '';
+      for (var bi = 0; bi < bytes.length; bi += 0x8000) b64 += String.fromCharCode.apply(null, bytes.subarray(bi, bi + 0x8000));
+      b64 = btoa(b64);
+      btn.disabled = true;
+      plug.Filesystem.writeFile({ path: fname, data: b64, directory: 'CACHE' }).then(function (r) {
+        // cópia na pasta Documentos (melhor esforço; não bloqueia o compartilhamento)
+        try { plug.Filesystem.writeFile({ path: fname, data: b64, directory: 'DOCUMENTS' }).catch(function () {}); } catch (e0) {}
+        return plug.Share.share({ title: 'Relatório de Mergulho CBMMG', text: fname, url: r.uri, dialogTitle: 'Salvar ou enviar relatório PDF' });
+      }).then(function () {
+        toast('Relatório gerado');
+      }).catch(function (err) {
+        var m = err && (err.message || err.errorMessage) ? String(err.message || err.errorMessage) : '';
+        if (/cancel/i.test(m)) toast('Compartilhamento cancelado');
+        else toast('Falha ao salvar o PDF: ' + (m || 'erro desconhecido'));
+      }).then(function () { btn.disabled = false; });
+      return;
+    }
+
     var blob = new Blob([bytes], { type: 'application/pdf' });
     var url = URL.createObjectURL(blob);
 
